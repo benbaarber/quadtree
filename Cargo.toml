@@ -1,11 +1,10 @@
 [package]
 name = "quadtree"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A generic quadtree implementation"
 license = "MIT"
 repository = "https://github.com/benbaarber/quadtree"
-readme = "README.md"
 keywords = ["quadtree"]
 
 [dependencies]
