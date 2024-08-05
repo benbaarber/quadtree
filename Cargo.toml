@@ -1,0 +1,12 @@
+[package]
+name = "quadtree"
+version = "0.1.0"
+edition = "2021"
+description = "A generic quadtree implementation"
+license = "MIT"
+repository = "https://github.com/benbaarber/quadtree"
+readme = "README.md"
+keywords = ["quadtree", "spatial", "index", "data structure"]
+
+[dependencies]
+nalgebra = "0.33.0"
