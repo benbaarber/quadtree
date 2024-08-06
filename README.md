@@ -7,10 +7,6 @@ This QuadTree library provides efficient spatial querying capabilities for 2D po
 
 ## Features
 
-- **Generic Implementation**: Works with any data type that implements the custom `Point` trait.
-- **Spatial Queries**: Supports querying within rectangular and circular areas.
-- **Dynamic Insertion**: Efficiently insert items and maintain spatial indexing without full rebuilds.
-
-## Planned
-
-- **Dynamic Deletion**: Delete items individually and by query without full rebuilds.
+- **Generic Implementation**: Works with any data type that implements the `Point` trait.
+- **Spatial Queries**: Supports querying within spatial regions that implement the `Shape` trait (`Rect` and `Circle` are provided).
+- **Dynamic Insertion / Deletion**: Efficiently insert/delete items and maintain spatial indexing without full rebuilds.
