@@ -1,3 +1,6 @@
+#[cfg(feature = "serde")]
+use serde::{ser::SerializeSeq, Serialize, Serializer};
+
 use crate::{
     shapes::{Rect, Shape},
     util::{determine_overlap_quadrants, determine_quadrant},
@@ -72,6 +75,15 @@ impl<T: Point + Clone> QuadTree<T> {
         results
     }
 
+    /// Query for items within a specified shape area
+    ///
+    /// **Returns** a vector of immutable references to items that were found within the shape
+    pub fn query_ref<S: Shape>(&self, shape: &S) -> Vec<&T> {
+        let mut results = vec![];
+        self.root.query_ref(shape, &mut results);
+        results
+    }
+
     /// Delete items that are within a specified shape area
     ///
     /// **Returns** the number of items that were deleted
@@ -100,6 +112,18 @@ impl<T: Point + Clone> QuadTree<T> {
     /// Get the boundary rect of the quadtree
     pub fn boundary(&self) -> &Rect {
         self.root.boundary()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T: Serialize + Point + Clone> Serialize for QuadTree<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let items = self.query_ref(self.boundary());
+        let mut seq = serializer.serialize_seq(Some(items.len()))?;
+        for item in items {
+            seq.serialize_element(item)?;
+        }
+        seq.end()
     }
 }
 
@@ -182,6 +206,30 @@ impl<T: Point + Clone> Node<T> {
                 if boundary.intersects(&shape.rect()) {
                     for q in determine_overlap_quadrants(boundary, &shape.rect()) {
                         children[q].query(shape, results);
+                    }
+                }
+            }
+            Self::Empty { .. } => (),
+        }
+    }
+
+    fn query_ref<'a, S: Shape>(&'a self, shape: &S, results: &mut Vec<&'a T>) {
+        match self {
+            Self::External { boundary, data } => {
+                if shape.contains_rect(boundary) {
+                    results.extend(data.iter());
+                } else {
+                    for item in data {
+                        if shape.contains(&item.point()) {
+                            results.push(item);
+                        }
+                    }
+                }
+            }
+            Self::Internal { boundary, children } => {
+                if boundary.intersects(&shape.rect()) {
+                    for q in determine_overlap_quadrants(boundary, &shape.rect()) {
+                        children[q].query_ref(shape, results);
                     }
                 }
             }
@@ -437,15 +485,11 @@ mod tests {
     }
 
     #[test]
-    fn query_rectangular_empty_quadtree() {
-        let qt = QuadTree::<P2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+    fn query_rectangular() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let results = qt.query(&make_rect(10.0, 10.0, 50.0, 50.0));
         assert!(results.is_empty(), "Should be empty for an empty tree");
-    }
 
-    #[test]
-    fn query_rectangular_external_node_contains_point() {
-        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let item = point![25.0, 25.0];
         qt.insert(&item);
         let results = qt.query(&make_rect(20.0, 20.0, 30.0, 30.0));
@@ -455,17 +499,25 @@ mod tests {
             item.point(),
             "The point should match the inserted item"
         );
-    }
 
-    #[test]
-    fn query_rectangular_external_node_does_not_contain_point() {
-        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
-        let item = point![75.0, 75.0];
-        qt.insert(&item);
-        let results = qt.query(&make_rect(20.0, 20.0, 30.0, 30.0));
+        let results = qt.query(&make_rect(70.0, 70.0, 80.0, 80.0));
         assert!(
             results.is_empty(),
             "Should not find any items outside the range"
+        );
+    }
+
+    #[test]
+    fn query_ref_rectangular() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let item = point![25.0, 25.0];
+        qt.insert(&item);
+        let results = qt.query_ref(&make_rect(20.0, 20.0, 30.0, 30.0));
+        assert_eq!(results.len(), 1, "Should find one item in the range");
+        assert_eq!(
+            results[0].point(),
+            item.point(),
+            "The point should match the inserted item"
         );
     }
 
@@ -507,15 +559,11 @@ mod tests {
 
     #[test]
     fn query_circular_empty_tree() {
-        let qt = QuadTree::<P2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = QuadTree::<P2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let circle = make_circle(50.0, 50.0, 10.0);
         let results = qt.query(&circle);
         assert!(results.is_empty(), "Should be empty for an empty tree");
-    }
 
-    #[test]
-    fn query_circular_contains_point() {
-        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let item = point![25.0, 25.0];
         qt.insert(&item);
         let circle = make_circle(20.0, 20.0, 10.0);
@@ -526,14 +574,8 @@ mod tests {
             item.point(),
             "The point should match the inserted item"
         );
-    }
 
-    #[test]
-    fn query_circular_does_not_contain_point() {
-        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
-        let item = point![75.0, 75.0];
-        qt.insert(&item);
-        let circle = make_circle(50.0, 50.0, 30.0);
+        let circle = make_circle(80.0, 80.0, 5.0);
         let results = qt.query(&circle);
         assert!(
             results.is_empty(),
@@ -696,6 +738,22 @@ mod tests {
         assert!(
             qt.insert(&point),
             "Point near the boundary should be inserted."
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_quadtree_serialization() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let points = vec![point![10.0, 10.0], point![20.0, 20.0], point![30.0, 30.0]];
+        qt.insert_many(&points);
+
+        let serialized = serde_json::to_string(&qt).expect("Failed to serialize QuadTree");
+        let expected_json = r#"[[10.0,10.0],[20.0,20.0],[30.0,30.0]]"#;
+
+        assert_eq!(
+            serialized, expected_json,
+            "Serialized QuadTree does not match expected JSON output"
         );
     }
 }

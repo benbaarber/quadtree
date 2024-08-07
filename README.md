@@ -14,3 +14,4 @@ This QuadTree library provides efficient spatial querying capabilities for 2D po
     - insert_many
     - delete
     - pop
+- **Serde Serialization**: Enable the `"serde"` feature to serialize the QuadTree and provided shapes. A `QuadTree<T>` will serialize into a sequence of items of type `T`.

@@ -83,9 +83,8 @@ pub(crate) mod tests {
 
         // Test with an inner rectangle that does not overlap any quadrant
         let inner_no_overlap = make_rect(101.0, 101.0, 150.0, 150.0);
-        assert_eq!(
-            determine_overlap_quadrants(&outer, &inner_no_overlap),
-            &[],
+        assert!(
+            determine_overlap_quadrants(&outer, &inner_no_overlap).is_empty(),
             "Inner rectangle does not overlap any quadrant."
         );
 

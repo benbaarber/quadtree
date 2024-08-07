@@ -1,5 +1,8 @@
 use nalgebra::{self as na, vector};
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
 use crate::{Point, P2};
 
 /// A trait for shapes that can be used to query the QuadTree. Shapes must be able to
@@ -54,8 +57,10 @@ impl<T: Point> Shape for T {
 /// It is used to define boundaries for QuadTree nodes and provides utility functions
 /// for geometric calculations.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Rect {
     start: P2,
+    #[cfg_attr(feature = "serde", serde(skip))]
     center: P2,
     end: P2,
 }
@@ -130,10 +135,13 @@ impl Shape for Rect {
 /// Represents a circle defined by a center point and radius. Provides utility functions
 /// for geometric calculations, particularly for interactions with QuadTree.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Circle {
     center: P2,
     radius: f64,
+    #[cfg_attr(feature = "serde", serde(skip))]
     start: P2,
+    #[cfg_attr(feature = "serde", serde(skip))]
     end: P2,
 }
 
@@ -414,5 +422,23 @@ mod tests {
             !circle.contains_rect(&rect),
             "Circle should not contain overlapping rect"
         );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serialize_rect() {
+        let rect = make_rect(0.0, 0.0, 10.0, 10.0);
+        let json = serde_json::to_string(&rect).expect("Rect should serialize successfully");
+        let expected_json = r#"{"start":[0.0,0.0],"end":[10.0,10.0]}"#;
+        assert_eq!(json, expected_json, "Rect should serialize correctly");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serialize_circle() {
+        let circle = make_circle(5.0, 5.0, 5.0);
+        let json = serde_json::to_string(&circle).expect("Circle should serialize successfully");
+        let expected_json = r#"{"center":[5.0,5.0],"radius":5.0}"#;
+        assert_eq!(json, expected_json, "Circle should serialize correctly");
     }
 }
