@@ -4,11 +4,12 @@ use crate::{
     Point, P2,
 };
 
-/// A generic QuadTree implementation for spatial indexing of 2D points.
+/// A generic QuadTree implementation for spatial indexing of 2D points
 #[derive(Debug)]
 pub struct QuadTree<T> {
     root: Node<T>,
     node_capacity: usize,
+    count: usize,
 }
 
 impl<T: Point + Clone> QuadTree<T> {
@@ -21,28 +22,60 @@ impl<T: Point + Clone> QuadTree<T> {
         Self {
             root: Node::Empty { boundary },
             node_capacity,
+            count: 0,
         }
     }
 
-    /// Insert a point into the quadtree
+    /// Get current number of items stored
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Insert an item into the QuadTree
     ///
     /// **Returns** a boolean value indicating if the item was inserted successfully
     pub fn insert(&mut self, item: &T) -> bool {
-        self.root.insert(item, self.node_capacity)
+        let success = self.root.insert(item, self.node_capacity);
+        if success {
+            self.count += 1;
+        }
+        success
     }
 
-    /// Queries the QuadTree for items within a specified shape area.
-    /// This method populates a passed mutable vector with all found items.
-    pub fn query<S: Shape>(&self, shape: &S, results: &mut Vec<T>) {
-        self.root.query(shape, results)
-    }
-
+    /// Get an item by its exact position
+    ///
+    /// **Returns** an `Option` containing the item if it exists
     pub fn get(&self, point: &P2) -> Option<T> {
         self.root.get(point)
     }
 
-    pub fn delete<S: Shape>(&mut self, shape: &S) {
-        self.root.delete(shape);
+    /// Query for items within a specified shape area
+    ///
+    /// **Returns** a vector of items that were found within the shape
+    pub fn query<S: Shape>(&self, shape: &S) -> Vec<T> {
+        let mut results = vec![];
+        self.root.query(shape, &mut results);
+        results
+    }
+
+    /// Delete items that are within a specified shape area
+    ///
+    /// **Returns** the number of items that were deleted
+    pub fn delete<S: Shape>(&mut self, shape: &S) -> usize {
+        let mut deleted = 0;
+        self.root.delete(shape, &mut deleted);
+        self.count -= deleted;
+        deleted
+    }
+
+    /// Pop items that are within a specified shape area
+    ///
+    /// **Returns** a vector of items that were found within the shape and removed
+    pub fn pop<S: Shape>(&mut self, shape: &S) -> Vec<T> {
+        let mut results = vec![];
+        self.root.pop(shape, &mut results);
+        self.count -= results.len();
+        results
     }
 
     /// Return the point at the center of the boundary
@@ -59,9 +92,9 @@ impl<T: Point + Clone> QuadTree<T> {
 /// QuadTree node enum
 ///
 /// ## Variants
-/// - `Internal`: Contains children nodes and represents a subdivided area.
-/// - `External`: Contains data and represents a leaf node.
-/// - `Empty`: Represents an empty area without any data.
+/// - `Internal`: Contains children nodes and represents a subdivided area
+/// - `External`: Contains data and represents a leaf node
+/// - `Empty`: Represents an empty area without any data
 #[derive(Debug)]
 enum Node<T> {
     Internal {
@@ -160,10 +193,8 @@ impl<T: Point + Clone> Node<T> {
         }
     }
 
-    /// Delete from quadtree
-    ///
-    /// Returns true if the node is empty after deletion
-    fn delete<S: Shape>(&mut self, shape: &S) -> bool {
+    // Returns true if the node is empty after deletion
+    fn delete<S: Shape>(&mut self, shape: &S, deleted: &mut usize) -> bool {
         match self {
             &mut Self::External {
                 boundary,
@@ -174,19 +205,20 @@ impl<T: Point + Clone> Node<T> {
                 }
 
                 if shape.contains_rect(&boundary) {
+                    *deleted += data.len();
                     *self = Self::Empty { boundary };
                     return true;
                 }
 
-                *data = data
-                    .drain(..)
-                    .filter(|item| !shape.contains(&item.point()))
-                    .collect();
+                let original_data_len = data.len();
+                data.retain(|item| !shape.contains(&item.point()));
+                *deleted += original_data_len - data.len();
 
                 if data.is_empty() {
                     *self = Self::Empty { boundary };
                     return true;
                 }
+
                 false
             }
             &mut Self::Internal {
@@ -196,7 +228,65 @@ impl<T: Point + Clone> Node<T> {
                 if boundary.intersects(&shape.rect()) {
                     let mut is_all_empty = true;
                     for c in children {
-                        let is_empty = c.delete(shape);
+                        let is_empty = c.delete(shape, deleted);
+                        if !is_empty {
+                            is_all_empty = false;
+                        }
+                    }
+                    if is_all_empty {
+                        *self = Self::Empty { boundary };
+                        return true;
+                    }
+                }
+
+                false
+            }
+            Self::Empty { .. } => true,
+        }
+    }
+
+    // Returns true if the node is empty after deletion
+    fn pop<S: Shape>(&mut self, shape: &S, results: &mut Vec<T>) -> bool {
+        match self {
+            &mut Self::External {
+                boundary,
+                ref mut data,
+            } => {
+                if !boundary.intersects(&shape.rect()) {
+                    return false;
+                }
+
+                if shape.contains_rect(&boundary) {
+                    results.extend(data.drain(..));
+                    *self = Self::Empty { boundary };
+                    return true;
+                }
+
+                let mut left_data = Vec::with_capacity(data.len());
+                for item in data.drain(..) {
+                    if shape.contains(&item.point()) {
+                        results.push(item);
+                    } else {
+                        left_data.push(item);
+                    }
+                }
+
+                if left_data.is_empty() {
+                    *self = Self::Empty { boundary };
+                    true
+                } else {
+                    *data = left_data;
+                    false
+                }
+            }
+            &mut Self::Internal {
+                boundary,
+                ref mut children,
+            } => {
+                if boundary.intersects(&shape.rect()) {
+                    let mut is_all_empty = true;
+                    for c in children {
+                        let is_empty = c.pop(shape, results);
                         if !is_empty {
                             is_all_empty = false;
                         }
@@ -280,10 +370,26 @@ mod tests {
     }
 
     #[test]
+    fn get_item() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let point = point![20.0, 20.0];
+        qt.insert(&point);
+
+        assert_eq!(
+            qt.get(&point),
+            Some(point),
+            "Should find the inserted point"
+        );
+        assert!(
+            qt.get(&point![30.0, 30.0]).is_none(),
+            "Should not find a point that was not inserted"
+        );
+    }
+
+    #[test]
     fn query_rectangular_empty_quadtree() {
         let qt = QuadTree::<P2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
-        let mut results = Vec::new();
-        qt.query(&make_rect(10.0, 10.0, 50.0, 50.0), &mut results);
+        let results = qt.query(&make_rect(10.0, 10.0, 50.0, 50.0));
         assert!(results.is_empty(), "Should be empty for an empty tree");
     }
 
@@ -292,8 +398,7 @@ mod tests {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let item = point![25.0, 25.0];
         qt.insert(&item);
-        let mut results = Vec::new();
-        qt.query(&make_rect(20.0, 20.0, 30.0, 30.0), &mut results);
+        let results = qt.query(&make_rect(20.0, 20.0, 30.0, 30.0));
         assert_eq!(results.len(), 1, "Should find one item in the range");
         assert_eq!(
             results[0].point(),
@@ -307,8 +412,7 @@ mod tests {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let item = point![75.0, 75.0];
         qt.insert(&item);
-        let mut results = Vec::new();
-        qt.query(&make_rect(20.0, 20.0, 30.0, 30.0), &mut results);
+        let results = qt.query(&make_rect(20.0, 20.0, 30.0, 30.0));
         assert!(
             results.is_empty(),
             "Should not find any items outside the range"
@@ -323,12 +427,10 @@ mod tests {
         qt.insert(&item1);
         qt.insert(&item2);
 
-        let mut results = Vec::new();
-        qt.query(&make_rect(20.0, 20.0, 80.0, 80.0), &mut results);
+        let results = qt.query(&make_rect(20.0, 20.0, 80.0, 80.0));
         assert_eq!(results.len(), 2, "Should find both items in the range");
 
-        let mut results = Vec::new();
-        qt.query(&make_rect(70.0, 70.0, 80.0, 80.0), &mut results);
+        let results = qt.query(&make_rect(70.0, 70.0, 80.0, 80.0));
         assert_eq!(results.len(), 1, "Should find one item in the range");
         assert_eq!(
             results[0].point(),
@@ -336,8 +438,7 @@ mod tests {
             "The point should match the second inserted item"
         );
 
-        let mut results = Vec::new();
-        qt.query(&make_rect(200.0, 200.0, 300.0, 300.0), &mut results);
+        let results = qt.query(&make_rect(200.0, 200.0, 300.0, 300.0));
         assert!(
             results.is_empty(),
             "Should not find any items outside the range"
@@ -350,8 +451,7 @@ mod tests {
         let edge_point = point![100.0, 50.0]; // Exactly on the boundary edge
         qt.insert(&edge_point);
         let query_shape = make_rect(95.0, 45.0, 105.0, 55.0);
-        let mut results = Vec::new();
-        qt.query(&query_shape, &mut results);
+        let results = qt.query(&query_shape);
         assert_eq!(results.len(), 1, "Should find the edge point.");
     }
 
@@ -359,8 +459,7 @@ mod tests {
     fn query_circular_empty_tree() {
         let qt = QuadTree::<P2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let circle = make_circle(50.0, 50.0, 10.0);
-        let mut results = Vec::new();
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert!(results.is_empty(), "Should be empty for an empty tree");
     }
 
@@ -370,8 +469,7 @@ mod tests {
         let item = point![25.0, 25.0];
         qt.insert(&item);
         let circle = make_circle(20.0, 20.0, 10.0);
-        let mut results = Vec::new();
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert_eq!(results.len(), 1, "Should find one item within the circle");
         assert_eq!(
             results[0].point(),
@@ -386,8 +484,7 @@ mod tests {
         let item = point![75.0, 75.0];
         qt.insert(&item);
         let circle = make_circle(50.0, 50.0, 30.0);
-        let mut results = Vec::new();
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert!(
             results.is_empty(),
             "Should not find any items outside the circle"
@@ -402,14 +499,12 @@ mod tests {
         qt.insert(&item1);
         qt.insert(&item2);
 
-        let mut results = Vec::new();
         let circle = make_circle(50.0, 50.0, 30.0);
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert_eq!(results.len(), 2, "Should find both items within the circle");
 
-        let mut results = Vec::new();
         let circle = make_circle(70.0, 70.0, 10.0);
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert_eq!(results.len(), 1, "Should find one item within the circle");
         assert_eq!(
             results[0].point(),
@@ -417,9 +512,8 @@ mod tests {
             "The point should match the second inserted item"
         );
 
-        let mut results = Vec::new();
         let circle = make_circle(200.0, 200.0, 50.0);
-        qt.query(&circle, &mut results);
+        let results = qt.query(&circle);
         assert!(
             results.is_empty(),
             "Should not find any items outside the circle"
@@ -435,7 +529,9 @@ mod tests {
         }
 
         let deletion_shape = make_rect(5.0, 5.0, 35.0, 15.0);
-        qt.delete(&deletion_shape);
+        let deleted = qt.delete(&deletion_shape);
+        assert_eq!(deleted, 2, "Two items were deleted");
+        assert_eq!(qt.count(), 1, "One item remains in tree");
         assert!(
             qt.get(&points[0]).is_none(),
             "Point at (10.0, 10.0) should have been deleted"
@@ -457,9 +553,12 @@ mod tests {
         for point in &points {
             qt.insert(point);
         }
+        assert_eq!(qt.count(), 3, "Three items should be in the tree");
 
         let deletion_shape = make_rect(15.0, 15.0, 25.0, 25.0);
-        qt.delete(&deletion_shape);
+        let deleted = qt.delete(&deletion_shape);
+        assert_eq!(deleted, 1, "One item was deleted");
+        assert_eq!(qt.count(), 2, "Two items remain in tree");
         assert!(
             qt.get(&points[0]).is_some(),
             "Point at (10.0, 10.0) should still exist"
@@ -491,12 +590,54 @@ mod tests {
         }
         let deletion_shape = make_rect(25.0, 25.0, 75.0, 75.0);
         qt.delete(&deletion_shape);
-        let mut results = Vec::new();
-        qt.query(&make_rect(0.0, 0.0, 100.0, 100.0), &mut results);
+        let results = qt.query(&make_rect(0.0, 0.0, 100.0, 100.0));
         assert_eq!(
             results.len(),
             4,
             "Should have 4 points left after partial deletion."
+        );
+    }
+
+    #[test]
+    fn test_pop_function() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let points = vec![
+            point![10.0, 10.0],
+            point![20.0, 20.0],
+            point![30.0, 30.0],
+            point![40.0, 40.0],
+        ];
+
+        for point in &points {
+            qt.insert(point);
+        }
+
+        assert_eq!(qt.count(), 4, "All four points were inserted");
+
+        let results = qt.pop(&make_rect(15.0, 15.0, 35.0, 35.0));
+        assert_eq!(
+            results.len(),
+            2,
+            "Should pop two points that intersect with the shape"
+        );
+        assert!(
+            results.contains(&points[1]),
+            "Should contain point (20, 20)"
+        );
+        assert!(
+            results.contains(&points[2]),
+            "Should contain point (30, 30)"
+        );
+
+        let remaining_points = qt.query(&make_rect(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(qt.count(), 2, "Two points should remain in the quadtree");
+        assert!(
+            remaining_points.contains(&points[0]),
+            "Should still contain point (10, 10)"
+        );
+        assert!(
+            remaining_points.contains(&points[3]),
+            "Should still contain point (40, 40)"
         );
     }
 

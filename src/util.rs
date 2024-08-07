@@ -15,13 +15,8 @@ pub(crate) fn determine_quadrant(rect: &Rect, point: &P2) -> Option<usize> {
 pub(crate) fn determine_overlap_quadrants(outer: &Rect, inner: &Rect) -> Vec<usize> {
     let mut quadrants = Vec::with_capacity(4);
     for (i, rect) in outer.quarter().iter().enumerate() {
-        dbg!(&rect);
-        dbg!(&i);
         if rect.intersects(inner) {
-            println!("DOES INTERSECT {i}");
             quadrants.push(i);
-        } else {
-            println!("DOES NOT INTERSECT {i}");
         }
     }
     quadrants
