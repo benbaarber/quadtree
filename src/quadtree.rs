@@ -42,6 +42,20 @@ impl<T: Point + Clone> QuadTree<T> {
         success
     }
 
+    /// Insert multiple items into the QuadTree
+    ///
+    /// **Returns** a vector of items that failed to insert, if any
+    pub fn insert_many(&mut self, items: &[T]) -> Vec<T> {
+        let mut failed = Vec::with_capacity(items.len());
+        for item in items {
+            let success = self.insert(item);
+            if !success {
+                failed.push(item.clone());
+            }
+        }
+        failed
+    }
+
     /// Get an item by its exact position
     ///
     /// **Returns** an `Option` containing the item if it exists
@@ -262,7 +276,7 @@ impl<T: Point + Clone> Node<T> {
                     return true;
                 }
 
-                let mut left_data = Vec::with_capacity(data.len());
+                let mut left_data = Vec::with_capacity(data.capacity());
                 for item in data.drain(..) {
                     if shape.contains(&item.point()) {
                         results.push(item);
@@ -340,6 +354,46 @@ mod tests {
     }
 
     #[test]
+    fn insert_multiple_items() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let points = vec![
+            point![10.0, 10.0],
+            point![150.0, 150.0], // This should fail (out of bounds)
+            point![20.0, 20.0],
+            point![120.0, 120.0], // This should fail (out of bounds)
+        ];
+
+        let failed_inserts = qt.insert_many(&points);
+
+        assert_eq!(failed_inserts.len(), 2, "Should return 2 failed inserts");
+        assert!(
+            failed_inserts.contains(&points[1]),
+            "Should include point (150, 150) as failed"
+        );
+        assert!(
+            failed_inserts.contains(&points[3]),
+            "Should include point (120, 120) as failed"
+        );
+
+        // Ensure that successful points are indeed in the QuadTree
+        assert!(
+            qt.get(&points[0].point()).is_some(),
+            "Point (10, 10) should be successfully inserted"
+        );
+        assert!(
+            qt.get(&points[2].point()).is_some(),
+            "Point (20, 20) should be successfully inserted"
+        );
+
+        // Check count correctness
+        assert_eq!(
+            qt.count(),
+            2,
+            "Count should be 2 for successfully inserted items"
+        );
+    }
+
+    #[test]
     fn insert_item_out_of_bounds() {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let item = point![150.0, 150.0];
@@ -349,13 +403,9 @@ mod tests {
     #[test]
     fn insert_multiple_items_subdivision() {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 2);
-        let item1 = point![20.0, 20.0];
-        let item2 = point![40.0, 40.0];
-        let item3 = point![60.0, 60.0];
+        let points = vec![point![20.0, 20.0], point![40.0, 40.0], point![60.0, 60.0]];
 
-        qt.insert(&item1);
-        qt.insert(&item2);
-        qt.insert(&item3);
+        qt.insert_many(&points);
 
         match qt.root {
             Node::Internal { children, .. } => {
@@ -608,9 +658,7 @@ mod tests {
             point![40.0, 40.0],
         ];
 
-        for point in &points {
-            qt.insert(point);
-        }
+        qt.insert_many(&points);
 
         assert_eq!(qt.count(), 4, "All four points were inserted");
 
