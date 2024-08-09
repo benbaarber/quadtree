@@ -21,7 +21,7 @@ impl<T: Point + Clone> QuadTree<T> {
     /// ## Arguments
     /// - `boundary`: The boundary of the quadtree
     /// - `node_capacity`: The maximum number of items a node can hold before subdividing
-    pub fn new(boundary: Rect, node_capacity: usize) -> Self {
+    pub const fn new(boundary: Rect, node_capacity: usize) -> Self {
         Self {
             root: Node::Empty { boundary },
             node_capacity,
@@ -30,7 +30,7 @@ impl<T: Point + Clone> QuadTree<T> {
     }
 
     /// Get current number of items stored
-    pub fn count(&self) -> usize {
+    pub const fn count(&self) -> usize {
         self.count
     }
 
@@ -68,19 +68,45 @@ impl<T: Point + Clone> QuadTree<T> {
 
     /// Query for items within a specified shape area
     ///
-    /// **Returns** a vector of items that were found within the shape
+    /// **Returns** a vector of items
     pub fn query<S: Shape>(&self, shape: &S) -> Vec<T> {
         let mut results = vec![];
-        self.root.query(shape, &mut results);
+        self.root.query(shape, &|_| true, &mut results);
+        results
+    }
+
+    /// Query for items within a specified shape area that pass a filter
+    ///
+    /// **Returns** a vector of items
+    pub fn query_filter<S, F>(&self, shape: &S, filter: F) -> Vec<T>
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
+        let mut results = vec![];
+        self.root.query(shape, &filter, &mut results);
         results
     }
 
     /// Query for items within a specified shape area
     ///
-    /// **Returns** a vector of immutable references to items that were found within the shape
+    /// **Returns** a vector of immutable references to items
     pub fn query_ref<S: Shape>(&self, shape: &S) -> Vec<&T> {
         let mut results = vec![];
-        self.root.query_ref(shape, &mut results);
+        self.root.query_ref(shape, &|_| true, &mut results);
+        results
+    }
+
+    /// Query for items within a specified shape area that pass a filter
+    ///
+    /// **Returns** a vector of immutable references to items
+    pub fn query_ref_filter<S, F>(&self, shape: &S, filter: F) -> Vec<&T>
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
+        let mut results = vec![];
+        self.root.query_ref(shape, &filter, &mut results);
         results
     }
 
@@ -89,7 +115,21 @@ impl<T: Point + Clone> QuadTree<T> {
     /// **Returns** the number of items that were deleted
     pub fn delete<S: Shape>(&mut self, shape: &S) -> usize {
         let mut deleted = 0;
-        self.root.delete(shape, &mut deleted);
+        self.root.delete(shape, &|_| true, &mut deleted);
+        self.count -= deleted;
+        deleted
+    }
+
+    /// Delete items that are within a specified shape area and pass a filter
+    ///
+    /// **Returns** the number of items that were deleted
+    pub fn delete_filter<S, F>(&mut self, shape: &S, filter: F) -> usize
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
+        let mut deleted = 0;
+        self.root.delete(shape, &filter, &mut deleted);
         self.count -= deleted;
         deleted
     }
@@ -99,7 +139,21 @@ impl<T: Point + Clone> QuadTree<T> {
     /// **Returns** a vector of items that were found within the shape and removed
     pub fn pop<S: Shape>(&mut self, shape: &S) -> Vec<T> {
         let mut results = vec![];
-        self.root.pop(shape, &mut results);
+        self.root.pop(shape, &|_| true, &mut results);
+        self.count -= results.len();
+        results
+    }
+
+    /// Pop items that are within a specified shape area and pass a filter
+    ///
+    /// **Returns** a vector of items that were found within the shape and removed
+    pub fn pop_filter<S, F>(&mut self, shape: &S, filter: F) -> Vec<T>
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
+        let mut results = vec![];
+        self.root.pop(shape, &filter, &mut results);
         self.count -= results.len();
         results
     }
@@ -110,7 +164,7 @@ impl<T: Point + Clone> QuadTree<T> {
     }
 
     /// Get the boundary rect of the quadtree
-    pub fn boundary(&self) -> &Rect {
+    pub const fn boundary(&self) -> &Rect {
         self.root.boundary()
     }
 }
@@ -189,14 +243,18 @@ impl<T: Point + Clone> Node<T> {
         }
     }
 
-    fn query<S: Shape>(&self, shape: &S, results: &mut Vec<T>) {
+    fn query<S, F>(&self, shape: &S, filter: &F, results: &mut Vec<T>)
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
         match self {
             Self::External { boundary, data } => {
                 if shape.contains_rect(boundary) {
-                    results.extend(data.clone());
+                    results.extend(data.iter().filter(|&a| filter(a)).cloned());
                 } else {
                     for item in data {
-                        if shape.contains(&item.point()) {
+                        if shape.contains(&item.point()) && filter(item) {
                             results.push(item.clone());
                         }
                     }
@@ -205,7 +263,7 @@ impl<T: Point + Clone> Node<T> {
             Self::Internal { boundary, children } => {
                 if boundary.intersects(&shape.rect()) {
                     for q in determine_overlap_quadrants(boundary, &shape.rect()) {
-                        children[q].query(shape, results);
+                        children[q].query(shape, filter, results);
                     }
                 }
             }
@@ -213,23 +271,28 @@ impl<T: Point + Clone> Node<T> {
         }
     }
 
-    fn query_ref<'a, S: Shape>(&'a self, shape: &S, results: &mut Vec<&'a T>) {
+    fn query_ref<'a, S, F>(&'a self, shape: &S, filter: &F, results: &mut Vec<&'a T>)
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
         match self {
             Self::External { boundary, data } => {
                 if shape.contains_rect(boundary) {
-                    results.extend(data.iter());
-                } else {
-                    for item in data {
-                        if shape.contains(&item.point()) {
-                            results.push(item);
-                        }
+                    results.extend(data.iter().filter(|&a| filter(a)));
+                    return;
+                }
+
+                for item in data {
+                    if shape.contains(&item.point()) && filter(item) {
+                        results.push(item);
                     }
                 }
             }
             Self::Internal { boundary, children } => {
                 if boundary.intersects(&shape.rect()) {
                     for q in determine_overlap_quadrants(boundary, &shape.rect()) {
-                        children[q].query_ref(shape, results);
+                        children[q].query_ref(shape, filter, results);
                     }
                 }
             }
@@ -256,7 +319,11 @@ impl<T: Point + Clone> Node<T> {
     }
 
     // Returns true if the node is empty after deletion
-    fn delete<S: Shape>(&mut self, shape: &S, deleted: &mut usize) -> bool {
+    fn delete<S, F>(&mut self, shape: &S, filter: &F, deleted: &mut usize) -> bool
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
         match self {
             &mut Self::External {
                 boundary,
@@ -266,14 +333,8 @@ impl<T: Point + Clone> Node<T> {
                     return false;
                 }
 
-                if shape.contains_rect(&boundary) {
-                    *deleted += data.len();
-                    *self = Self::Empty { boundary };
-                    return true;
-                }
-
                 let original_data_len = data.len();
-                data.retain(|item| !shape.contains(&item.point()));
+                data.retain(|item| !(shape.contains(&item.point()) && filter(item)));
                 *deleted += original_data_len - data.len();
 
                 if data.is_empty() {
@@ -290,7 +351,7 @@ impl<T: Point + Clone> Node<T> {
                 if boundary.intersects(&shape.rect()) {
                     let mut is_all_empty = true;
                     for c in children {
-                        let is_empty = c.delete(shape, deleted);
+                        let is_empty = c.delete(shape, filter, deleted);
                         if !is_empty {
                             is_all_empty = false;
                         }
@@ -308,7 +369,11 @@ impl<T: Point + Clone> Node<T> {
     }
 
     // Returns true if the node is empty after deletion
-    fn pop<S: Shape>(&mut self, shape: &S, results: &mut Vec<T>) -> bool {
+    fn pop<S, F>(&mut self, shape: &S, filter: &F, results: &mut Vec<T>) -> bool
+    where
+        S: Shape,
+        F: Fn(&T) -> bool,
+    {
         match self {
             &mut Self::External {
                 boundary,
@@ -318,15 +383,9 @@ impl<T: Point + Clone> Node<T> {
                     return false;
                 }
 
-                if shape.contains_rect(&boundary) {
-                    results.extend(data.drain(..));
-                    *self = Self::Empty { boundary };
-                    return true;
-                }
-
                 let mut left_data = Vec::with_capacity(data.capacity());
                 for item in data.drain(..) {
-                    if shape.contains(&item.point()) {
+                    if shape.contains(&item.point()) && filter(&item) {
                         results.push(item);
                     } else {
                         left_data.push(item);
@@ -348,7 +407,7 @@ impl<T: Point + Clone> Node<T> {
                 if boundary.intersects(&shape.rect()) {
                     let mut is_all_empty = true;
                     for c in children {
-                        let is_empty = c.pop(shape, results);
+                        let is_empty = c.pop(shape, filter, results);
                         if !is_empty {
                             is_all_empty = false;
                         }
@@ -369,7 +428,7 @@ impl<T: Point + Clone> Node<T> {
         self.boundary().center()
     }
 
-    fn boundary(&self) -> &Rect {
+    const fn boundary(&self) -> &Rect {
         match self {
             Self::Empty { boundary } => boundary,
             Self::External { boundary, .. } => boundary,
@@ -388,6 +447,7 @@ mod tests {
     use nalgebra::point;
 
     use crate::{
+        shapes::Circle,
         util::tests::{make_circle, make_rect},
         Point,
     };
@@ -613,6 +673,36 @@ mod tests {
     }
 
     #[test]
+    fn query_filter_exclude_point() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let items = vec![point![40.0, 40.0], point![50.0, 50.0], point![60.0, 60.0]];
+        qt.insert_many(&items);
+
+        let area = Circle::new(items[1], 20.0);
+        let results = qt.query_filter(&area, |p| p.point() != area.center());
+        assert!(
+            !results.contains(&items[1]),
+            "Should not find the excluded point"
+        );
+        assert_eq!(results.len(), 2, "Should find two points within the circle");
+    }
+
+    #[test]
+    fn query_ref_filter_exclude_point() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let items = vec![point![40.0, 40.0], point![50.0, 50.0], point![60.0, 60.0]];
+        qt.insert_many(&items);
+
+        let area = Circle::new(items[1], 20.0);
+        let results = qt.query_ref_filter(&area, |p| p.point() != area.center());
+        assert!(
+            !results.contains(&&items[1]),
+            "Should not find the excluded point"
+        );
+        assert_eq!(results.len(), 2, "Should find two points within the circle");
+    }
+
+    #[test]
     fn delete_rect() {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let points = vec![point![10.0, 10.0], point![30.0, 10.0], point![10.0, 30.0]];
@@ -691,6 +781,30 @@ mod tests {
     }
 
     #[test]
+    fn delete_filter_exclude_point() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let points = vec![point![15.0, 15.0], point![20.0, 20.0], point![25.0, 25.0]];
+        qt.insert_many(&points);
+
+        let area = make_rect(10.0, 10.0, 30.0, 30.0);
+        let deleted = qt.delete_filter(&area, |p| p.point() != area.center());
+        assert_eq!(deleted, 2, "Two items were deleted");
+        assert_eq!(qt.count(), 1, "One item remains in tree");
+        assert!(
+            qt.get(&points[0]).is_none(),
+            "Point at (15.0, 15.0) should have been deleted"
+        );
+        assert!(
+            qt.get(&points[1]).is_some(),
+            "Point at (20.0, 20.0) should still exist"
+        );
+        assert!(
+            qt.get(&points[2]).is_none(),
+            "Point at (25.0, 25.0) should have been deleted"
+        );
+    }
+
+    #[test]
     fn test_pop_function() {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let points = vec![
@@ -728,6 +842,30 @@ mod tests {
         assert!(
             remaining_points.contains(&points[3]),
             "Should still contain point (40, 40)"
+        );
+    }
+
+    #[test]
+    fn pop_filter_exclude_point() {
+        let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let points = vec![point![15.0, 15.0], point![20.0, 20.0], point![25.0, 25.0]];
+        qt.insert_many(&points);
+
+        let area = make_rect(10.0, 10.0, 30.0, 30.0);
+        let results = qt.pop_filter(&area, |p| p.point() != area.center());
+        assert_eq!(results.len(), 2, "Two items were popped");
+        assert_eq!(qt.count(), 1, "One item remains in tree");
+        assert!(
+            results.contains(&points[2]),
+            "Point at (25.0, 25.0) should have been popped"
+        );
+        assert!(
+            !results.contains(&points[1]),
+            "Point at (20.0, 20.0) should not have been popped"
+        );
+        assert!(
+            qt.get(&points[1]).is_some(),
+            "Point at (20.0, 20.0) should still exist"
         );
     }
 
