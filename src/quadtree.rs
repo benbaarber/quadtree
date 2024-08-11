@@ -3,7 +3,7 @@ use serde::{ser::SerializeSeq, Serialize, Serializer};
 
 use crate::{
     shapes::{Rect, Shape},
-    util::{determine_overlap_quadrants, determine_quadrant},
+    util::{determine_overlap_quadrants, determine_quadrant, group_by_quadrant},
     Point, P2,
 };
 
@@ -49,13 +49,12 @@ impl<T: Point + Clone> QuadTree<T> {
     ///
     /// **Returns** a vector of items that failed to insert, if any
     pub fn insert_many(&mut self, items: &[T]) -> Vec<T> {
+        let items = items.to_vec();
+        let num_items = items.len();
         let mut failed = Vec::with_capacity(items.len());
-        for item in items {
-            let success = self.insert(item);
-            if !success {
-                failed.push(item.clone());
-            }
-        }
+        self.root
+            .insert_many(items, self.node_capacity, &mut failed);
+        self.count += num_items - failed.len();
         failed
     }
 
@@ -164,7 +163,7 @@ impl<T: Point + Clone> QuadTree<T> {
     }
 
     /// Get the boundary rect of the quadtree
-    pub const fn boundary(&self) -> &Rect {
+    pub const fn boundary(&self) -> Rect {
         self.root.boundary()
     }
 }
@@ -172,7 +171,7 @@ impl<T: Point + Clone> QuadTree<T> {
 #[cfg(feature = "serde")]
 impl<T: Serialize + Point + Clone> Serialize for QuadTree<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let items = self.query_ref(self.boundary());
+        let items = self.query_ref(&self.boundary());
         let mut seq = serializer.serialize_seq(Some(items.len()))?;
         for item in items {
             seq.serialize_element(item)?;
@@ -210,14 +209,14 @@ impl<T: Point + Clone> Node<T> {
             return false;
         }
 
-        match self {
-            &mut Self::Empty { boundary } => {
+        match *self {
+            Self::Empty { boundary } => {
                 let mut data = Vec::with_capacity(capacity);
                 data.push(item.clone());
                 *self = Self::External { boundary, data };
                 true
             }
-            &mut Self::External {
+            Self::External {
                 boundary,
                 ref mut data,
             } => {
@@ -226,20 +225,70 @@ impl<T: Point + Clone> Node<T> {
                     return true;
                 }
 
-                let data = std::mem::take(data);
+                let mut data = std::mem::take(data);
+                data.push(item.clone());
                 let children = self.subdivide();
                 *self = Self::Internal { boundary, children };
 
-                for existing_item in &data {
-                    self.insert(existing_item, capacity);
-                }
-
-                self.insert(item, capacity)
+                let mut failed = Vec::with_capacity(data.len());
+                self.insert_many(data, capacity, &mut failed);
+                failed.len() == 0
             }
-            Self::Internal { boundary, children } => match determine_quadrant(boundary, &point) {
+            Self::Internal {
+                boundary,
+                ref mut children,
+            } => match determine_quadrant(&boundary, &point) {
                 Some(q) => children[q].insert(item, capacity),
                 None => false,
             },
+        }
+    }
+
+    fn insert_many(&mut self, mut items: Vec<T>, capacity: usize, failed: &mut Vec<T>) {
+        match *self {
+            Self::Empty { boundary } => {
+                if items.len() <= capacity {
+                    items.reserve_exact(capacity - items.len());
+                    *self = Self::External {
+                        boundary,
+                        data: items,
+                    };
+                } else {
+                    let children = self.subdivide();
+                    *self = Self::Internal { boundary, children };
+                    self.insert_many(items, capacity, failed);
+                }
+            }
+            Self::External {
+                boundary,
+                ref mut data,
+            } => {
+                if data.len() + items.len() <= capacity {
+                    data.extend(items);
+                    return;
+                }
+
+                items.append(data);
+                let children = self.subdivide();
+                *self = Self::Internal { boundary, children };
+                self.insert_many(items, capacity, failed);
+            }
+            Self::Internal {
+                boundary,
+                ref mut children,
+            } => {
+                let mut groups = group_by_quadrant(&boundary, items).into_iter();
+                for c in children {
+                    let items = groups.next().unwrap();
+                    if items.len() > 0 {
+                        c.insert_many(items, capacity, failed)
+                    }
+                }
+                let cur_failed = groups.next().unwrap();
+                if cur_failed.len() > 0 {
+                    failed.extend(cur_failed);
+                }
+            }
         }
     }
 
@@ -324,8 +373,8 @@ impl<T: Point + Clone> Node<T> {
         S: Shape,
         F: Fn(&T) -> bool,
     {
-        match self {
-            &mut Self::External {
+        match *self {
+            Self::External {
                 boundary,
                 ref mut data,
             } => {
@@ -344,7 +393,7 @@ impl<T: Point + Clone> Node<T> {
 
                 false
             }
-            &mut Self::Internal {
+            Self::Internal {
                 boundary,
                 ref mut children,
             } => {
@@ -374,8 +423,8 @@ impl<T: Point + Clone> Node<T> {
         S: Shape,
         F: Fn(&T) -> bool,
     {
-        match self {
-            &mut Self::External {
+        match *self {
+            Self::External {
                 boundary,
                 ref mut data,
             } => {
@@ -400,7 +449,7 @@ impl<T: Point + Clone> Node<T> {
                     false
                 }
             }
-            &mut Self::Internal {
+            Self::Internal {
                 boundary,
                 ref mut children,
             } => {
@@ -428,11 +477,11 @@ impl<T: Point + Clone> Node<T> {
         self.boundary().center()
     }
 
-    const fn boundary(&self) -> &Rect {
+    const fn boundary(&self) -> Rect {
         match self {
-            Self::Empty { boundary } => boundary,
-            Self::External { boundary, .. } => boundary,
-            Self::Internal { boundary, .. } => boundary,
+            Self::Empty { boundary } => *boundary,
+            Self::External { boundary, .. } => *boundary,
+            Self::Internal { boundary, .. } => *boundary,
         }
     }
 
@@ -706,9 +755,7 @@ mod tests {
     fn delete_rect() {
         let mut qt = QuadTree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
         let points = vec![point![10.0, 10.0], point![30.0, 10.0], point![10.0, 30.0]];
-        for point in &points {
-            qt.insert(point);
-        }
+        qt.insert_many(&points);
 
         let deletion_shape = make_rect(5.0, 5.0, 35.0, 15.0);
         let deleted = qt.delete(&deletion_shape);

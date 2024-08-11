@@ -1,15 +1,41 @@
 use crate::{
     shapes::{Rect, Shape},
-    P2,
+    Point,
 };
 
-pub(crate) fn determine_quadrant(rect: &Rect, point: &P2) -> Option<usize> {
+pub(crate) fn determine_quadrant<T: Point>(rect: &Rect, item: &T) -> Option<usize> {
     for (i, rect) in rect.quarter().iter().enumerate() {
-        if rect.contains(point) {
+        if rect.contains(&item.point()) {
             return Some(i);
         }
     }
     None
+}
+
+pub(crate) fn group_by_quadrant<T: Point>(rect: &Rect, items: Vec<T>) -> [Vec<T>; 5] {
+    let mut groups: [Vec<T>; 5] = std::array::from_fn(|_| Vec::with_capacity(items.len()));
+    for item in items {
+        match determine_quadrant(rect, &item) {
+            Some(q) => groups[q].push(item),
+            None => groups[4].push(item),
+        }
+    }
+    groups
+}
+
+#[allow(unused)]
+pub(crate) fn group_by_quadrant_slice<'a, T: Point>(
+    rect: &Rect,
+    items: &'a [T],
+) -> [Vec<&'a T>; 5] {
+    let mut groups: [Vec<&T>; 5] = std::array::from_fn(|_| Vec::with_capacity(items.len()));
+    for item in items {
+        match determine_quadrant(rect, item) {
+            Some(q) => groups[q].push(item),
+            None => groups[4].push(item),
+        }
+    }
+    groups
 }
 
 pub(crate) fn determine_overlap_quadrants(outer: &Rect, inner: &Rect) -> Vec<usize> {
@@ -59,6 +85,32 @@ pub(crate) mod tests {
             results, expected_quadrants,
             "Each point should match its expected quadrant"
         );
+    }
+
+    #[test]
+    fn test_group_by_quadrant() {
+        let rect = make_rect(0.0, 0.0, 10.0, 10.0);
+        let points = [
+            point![2.5, 2.5],   // Should be in the first quadrant (index 0)
+            point![7.5, 2.5],   // Should be in the second quadrant (index 1)
+            point![2.5, 7.5],   // Should be in the third quadrant (index 2)
+            point![7.5, 7.5],   // Should be in the fourth quadrant (index 3)
+            point![10.5, 10.5], // Should be outside all quadrants (index 4)
+        ];
+
+        let expected_groups = [
+            vec![point![2.5, 2.5]],
+            vec![point![7.5, 2.5]],
+            vec![point![2.5, 7.5]],
+            vec![point![7.5, 7.5]],
+            vec![point![10.5, 10.5]],
+        ];
+
+        let results = group_by_quadrant(&rect, points.to_vec());
+
+        for (expected, result) in expected_groups.iter().zip(results.iter()) {
+            assert_eq!(result, expected, "Each group should match its expected value");
+        }
     }
 
     #[test]
