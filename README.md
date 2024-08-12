@@ -7,7 +7,7 @@ This QuadTree library provides efficient spatial querying capabilities for 2D po
 
 ## Features
 
-- **Generic Implementation**: Works with any data type that implements the `Point` trait.
+- **Generic Implementation**: `QuadTree<T>` works with any data type `T` that implements the `Point` and `Clone` traits.
 - **Spatial Queries**: Supports querying within spatial regions that implement the `Shape` trait (`Rect` and `Circle` are provided).
 - **Dynamic Operations**: Efficiently perform mutating operations without full rebuilds.
     - insert

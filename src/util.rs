@@ -109,7 +109,10 @@ pub(crate) mod tests {
         let results = group_by_quadrant(&rect, points.to_vec());
 
         for (expected, result) in expected_groups.iter().zip(results.iter()) {
-            assert_eq!(result, expected, "Each group should match its expected value");
+            assert_eq!(
+                result, expected,
+                "Each group should match its expected value"
+            );
         }
     }
 
