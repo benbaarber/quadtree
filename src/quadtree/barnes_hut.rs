@@ -91,7 +91,12 @@ impl BHQuadtree {
         while n < self.nodes.len() {
             let range = self.nodes[n].items.clone();
             if range.len() > node_capacity {
-                self.subdivide(n, range);
+                if self.subdivide(n, range) {
+                    for i in self.nodes[n].items.clone() {
+                        self.nodes[n].cm.pos += self.items[i].pos * self.items[i].mass;
+                        self.nodes[n].cm.mass += self.items[i].mass;
+                    }
+                }
             } else {
                 for i in range {
                     self.nodes[n].cm.pos += self.items[i].pos * self.items[i].mass;
@@ -146,7 +151,7 @@ impl BHQuadtree {
         acc
     }
 
-    fn subdivide(&mut self, n: usize, range: Range<usize>) {
+    fn subdivide(&mut self, n: usize, range: Range<usize>) -> bool {
         let c = self.nodes.len();
         self.nodes[n].children = c;
         self.internal_nodes.push(n);
@@ -162,12 +167,26 @@ impl BHQuadtree {
         split[1] = split[0] + self.items[split[0]..split[2]].partition(predicate);
         split[3] = split[2] + self.items[split[2]..split[4]].partition(predicate);
 
+        let range_len = range.end-range.start;
+        if split[2]-split[1] == range_len 
+            || split[3]-split[2] == range_len 
+            || split[4]-split[3] == range_len
+            || split[1]-split[0] == range_len {
+            // all nodes have same position, so we can not subdivide further
+            // prevent endless loop
+            if self.items[split[0]].pos == self.items[split[4]-1].pos {
+                self.nodes[n].children = 0;
+                return false;
+            }
+        }
+
         let bounds = self.nodes[n].bound.quarter();
         let nexts = [c + 1, c + 2, c + 3, self.nodes[n].next];
         for i in 0..4 {
             let items = split[i]..split[i + 1];
             self.nodes.push(Node::new(bounds[i], items, nexts[i]));
         }
+        true
     }
 }
 
@@ -248,5 +267,24 @@ mod tests {
         // accumulate with theta=0 sums two points
         let sum = qt.accumulate(vec2(1.0, 0.0), |wp| wp.pos);
         assert_eq!(sum, vec2(2.0, 0.0));
+    }
+
+    #[test]
+    fn test_same_position_points() {
+        // two points, capacity=1 so it subdivides
+        let mut pts = vec![
+            WeightedPoint::new(vec2(0.0, 0.0), 1.0),
+            WeightedPoint::new(vec2(2.0, 0.0), 1.0),
+            WeightedPoint::new(vec2(-2.0, 1.0), 1.0),
+            WeightedPoint::new(vec2(-1.0, -2.0), 1.0),
+        ];
+        for _ in 0..10 {
+            pts.push(WeightedPoint::new(vec2(2.0, 0.0), 1.0));
+        }
+
+        let mut qt = BHQuadtree::new(0.0);
+        qt.build(pts, 2);
+        // accumulate with theta=0 sums two points
+        let _sum = qt.accumulate(vec2(1.0, 0.0), |wp| wp.pos);
     }
 }
