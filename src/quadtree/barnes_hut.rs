@@ -91,7 +91,7 @@ impl BHQuadtree {
         while n < self.nodes.len() {
             let range = self.nodes[n].items.clone();
             if range.len() > node_capacity {
-                if self.subdivide(n, range) {
+                if !self.subdivide(n, range) {
                     for i in self.nodes[n].items.clone() {
                         self.nodes[n].cm.pos += self.items[i].pos * self.items[i].mass;
                         self.nodes[n].cm.mass += self.items[i].mass;
