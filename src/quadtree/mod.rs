@@ -15,6 +15,7 @@ use crate::{
 pub struct Quadtree<T> {
     root: Node<T>,
     node_capacity: usize,
+    max_depth: usize,
     count: usize,
 }
 
@@ -24,10 +25,12 @@ impl<T: Point + Clone> Quadtree<T> {
     /// ## Arguments
     /// - `bound`: The bound of the quadtree
     /// - `node_capacity`: The maximum number of items a node can hold before subdividing
-    pub const fn new(bound: Rect, node_capacity: usize) -> Self {
+    /// - `max_depth`: The maximum depth of the tree at which nodes will ignore capacity
+    pub const fn new(bound: Rect, node_capacity: usize, max_depth: usize) -> Self {
         Self {
             root: Node::Empty { bound: bound },
             node_capacity,
+            max_depth,
             count: 0,
         }
     }
@@ -41,7 +44,7 @@ impl<T: Point + Clone> Quadtree<T> {
     ///
     /// **Returns** a boolean value indicating if the item was inserted successfully
     pub fn insert(&mut self, item: &T) -> bool {
-        let success = self.root.insert(item, self.node_capacity);
+        let success = self.root.insert(item, self.node_capacity, 0, self.max_depth);
         if success {
             self.count += 1;
         }
@@ -56,7 +59,7 @@ impl<T: Point + Clone> Quadtree<T> {
         let num_items = items.len();
         let mut failed = Vec::with_capacity(items.len());
         self.root
-            .insert_many(items, self.node_capacity, &mut failed);
+            .insert_many(items, self.node_capacity, 0, self.max_depth, &mut failed);
         self.count += num_items - failed.len();
         failed
     }
@@ -205,7 +208,7 @@ pub(crate) enum Node<T> {
 }
 
 impl<T: Point + Clone> Node<T> {
-    fn insert(&mut self, item: &T, capacity: usize) -> bool {
+    fn insert(&mut self, item: &T, capacity: usize, depth: usize, max_depth: usize) -> bool {
         let point = item.point();
 
         if !self.bound().contains(point) {
@@ -224,7 +227,7 @@ impl<T: Point + Clone> Node<T> {
                 ref mut data,
                 ..
             } => {
-                if data.len() < capacity {
+                if data.len() < capacity || depth >= max_depth {
                     data.push(item.clone());
                     return true;
                 }
@@ -235,7 +238,7 @@ impl<T: Point + Clone> Node<T> {
                 *self = Self::Internal { bound, children };
 
                 let mut failed = Vec::with_capacity(data.len());
-                self.insert_many(data, capacity, &mut failed);
+                self.insert_many(data, capacity, depth, max_depth, &mut failed);
                 failed.len() == 0
             }
             Self::Internal {
@@ -243,22 +246,28 @@ impl<T: Point + Clone> Node<T> {
                 ref mut children,
                 ..
             } => match bound.quadrant(point) {
-                Some(q) => children[q].insert(item, capacity),
+                Some(q) => children[q].insert(item, capacity, depth + 1, max_depth),
                 None => false,
             },
         }
     }
 
-    fn insert_many(&mut self, mut items: Vec<T>, capacity: usize, failed: &mut Vec<T>) {
+    fn insert_many(
+        &mut self,
+        mut items: Vec<T>,
+        capacity: usize,
+        depth: usize,
+        max_depth: usize,
+        failed: &mut Vec<T>,
+    ) {
         match *self {
             Self::Empty { bound } => {
-                if items.len() <= capacity {
-                    items.reserve_exact(capacity - items.len());
+                if items.len() <= capacity || depth >= max_depth {
                     *self = Self::External { bound, data: items };
                 } else {
                     let children = self.subdivide();
                     *self = Self::Internal { bound, children };
-                    self.insert_many(items, capacity, failed);
+                    self.insert_many(items, capacity, depth, max_depth, failed);
                 }
             }
             Self::External {
@@ -266,7 +275,7 @@ impl<T: Point + Clone> Node<T> {
                 ref mut data,
                 ..
             } => {
-                if data.len() + items.len() <= capacity {
+                if data.len() + items.len() <= capacity || depth >= max_depth {
                     data.extend(items);
                     return;
                 }
@@ -274,7 +283,7 @@ impl<T: Point + Clone> Node<T> {
                 items.append(data);
                 let children = self.subdivide();
                 *self = Self::Internal { bound, children };
-                self.insert_many(items, capacity, failed);
+                self.insert_many(items, capacity, depth, max_depth, failed);
             }
             Self::Internal {
                 bound,
@@ -285,7 +294,7 @@ impl<T: Point + Clone> Node<T> {
                 for c in children {
                     let items = groups.next().unwrap();
                     if items.len() > 0 {
-                        c.insert_many(items, capacity, failed)
+                        c.insert_many(items, capacity, depth + 1, max_depth, failed)
                     }
                 }
                 let cur_failed = groups.next().unwrap();
@@ -519,14 +528,14 @@ mod tests {
 
     #[test]
     fn insert_single_item() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let item = vec2(25.0, 25.0);
         assert!(qt.insert(&item), "Should insert item successfully");
     }
 
     #[test]
     fn insert_multiple_items() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![
             vec2(10.0, 10.0),
             vec2(150.0, 150.0), // This should fail (out of bounds)
@@ -566,14 +575,14 @@ mod tests {
 
     #[test]
     fn insert_item_out_of_bounds() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let item = vec2(150.0, 150.0);
         assert!(!qt.insert(&item), "Should not insert item outside bounds");
     }
 
     #[test]
     fn insert_multiple_items_subdivision() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 2);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 2, 8);
         let points = vec![vec2(20.0, 20.0), vec2(40.0, 40.0), vec2(60.0, 60.0)];
 
         qt.insert_many(&points);
@@ -592,7 +601,7 @@ mod tests {
 
     #[test]
     fn get_item() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let point = vec2(20.0, 20.0);
         qt.insert(&point);
 
@@ -605,7 +614,7 @@ mod tests {
 
     #[test]
     fn query_rectangular() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let results = qt.query(&make_rect(10.0, 10.0, 50.0, 50.0));
         assert!(results.is_empty(), "Should be empty for an empty tree");
 
@@ -628,7 +637,7 @@ mod tests {
 
     #[test]
     fn query_ref_rectangular() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let item = vec2(25.0, 25.0);
         qt.insert(&item);
         let results = qt.query_ref(&make_rect(20.0, 20.0, 30.0, 30.0));
@@ -642,7 +651,7 @@ mod tests {
 
     #[test]
     fn query_rectangular_internal_nodes_multiple_items() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let item1 = vec2(25.0, 25.0);
         let item2 = vec2(75.0, 75.0);
         qt.insert(&item1);
@@ -668,7 +677,7 @@ mod tests {
 
     #[test]
     fn query_rectangular_boundary_edge_overlap() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 4);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 4, 8);
         let edge_point = vec2(100.0, 50.0); // Exactly on the boundary edge
         qt.insert(&edge_point);
         let query_shape = make_rect(95.0, 45.0, 105.0, 55.0);
@@ -678,7 +687,7 @@ mod tests {
 
     #[test]
     fn query_circular_empty_tree() {
-        let mut qt = Quadtree::<Vec2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::<Vec2>::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let circle = make_circle(50.0, 50.0, 10.0);
         let results = qt.query(&circle);
         assert!(results.is_empty(), "Should be empty for an empty tree");
@@ -704,7 +713,7 @@ mod tests {
 
     #[test]
     fn query_circular_internal_nodes_multiple_items() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let item1 = vec2(35.0, 35.0);
         let item2 = vec2(65.0, 65.0);
         qt.insert(&item1);
@@ -733,7 +742,7 @@ mod tests {
 
     #[test]
     fn query_filter_exclude_point() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let items = vec![vec2(40.0, 40.0), vec2(50.0, 50.0), vec2(60.0, 60.0)];
         qt.insert_many(&items);
 
@@ -748,7 +757,7 @@ mod tests {
 
     #[test]
     fn query_ref_filter_exclude_point() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let items = vec![vec2(40.0, 40.0), vec2(50.0, 50.0), vec2(60.0, 60.0)];
         qt.insert_many(&items);
 
@@ -763,7 +772,7 @@ mod tests {
 
     #[test]
     fn delete_rect() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![vec2(10.0, 10.0), vec2(30.0, 10.0), vec2(10.0, 30.0)];
         qt.insert_many(&points);
 
@@ -787,7 +796,7 @@ mod tests {
 
     #[test]
     fn delete_rect_bounds() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![vec2(10.0, 10.0), vec2(20.0, 20.0), vec2(30.0, 30.0)];
         for point in &points {
             qt.insert(point);
@@ -814,7 +823,7 @@ mod tests {
 
     #[test]
     fn delete_rect_multi_level() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 2);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 2, 8);
         // Points to cause subdivisions
         let points = [
             vec2(10.0, 10.0),
@@ -839,7 +848,7 @@ mod tests {
 
     #[test]
     fn delete_filter_exclude_point() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![vec2(15.0, 15.0), vec2(20.0, 20.0), vec2(25.0, 25.0)];
         qt.insert_many(&points);
 
@@ -863,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_pop_function() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![
             vec2(10.0, 10.0),
             vec2(20.0, 20.0),
@@ -904,7 +913,7 @@ mod tests {
 
     #[test]
     fn pop_filter_exclude_point() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![vec2(15.0, 15.0), vec2(20.0, 20.0), vec2(25.0, 25.0)];
         qt.insert_many(&points);
 
@@ -928,7 +937,7 @@ mod tests {
 
     #[test]
     fn precise_floating_point_handling() {
-        let mut qt = Quadtree::new(make_rect(0.00001, 0.00001, 99.99999, 99.99999), 2);
+        let mut qt = Quadtree::new(make_rect(0.00001, 0.00001, 99.99999, 99.99999), 2, 8);
         let point = vec2(0.0001, 0.0001);
         assert!(
             qt.insert(&point),
@@ -936,10 +945,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn many_identical_points() {
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 4, 4);
+        let points = [vec2(20.0, 20.0); 10];
+        // Test passes if stack does not overflow
+        qt.insert_many(&points);
+    }
+
     #[cfg(feature = "serde")]
     #[test]
     fn test_quadtree_serialization() {
-        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1);
+        let mut qt = Quadtree::new(make_rect(0.0, 0.0, 100.0, 100.0), 1, 8);
         let points = vec![vec2(10.0, 10.0), vec2(20.0, 20.0), vec2(30.0, 30.0)];
         qt.insert_many(&points);
 

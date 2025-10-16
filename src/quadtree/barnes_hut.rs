@@ -64,22 +64,31 @@ pub struct BHQuadtree {
     nodes: Vec<Node>,
     internal_nodes: Vec<usize>,
     items: Vec<WeightedPoint>,
+    node_capacity: usize,
+    max_depth: usize,
     theta2: f32,
 }
 
 impl BHQuadtree {
-    /// Create a new empty BHQuadtree with a given theta parameter
-    pub fn new(theta: f32) -> Self {
+    /// Create a new empty BHQuadtree
+    ///
+    /// ## Arguments
+    /// - `node_capacity`: The maximum number of items a node can hold before subdividing
+    /// - `max_depth`: The maximum depth of the tree at which nodes will ignore capacity
+    /// - `theta`: Theta parameter of Barnes-Hut algorithm
+    pub fn new(node_capacity: usize, max_depth: usize, theta: f32) -> Self {
         Self {
             nodes: Vec::new(),
             internal_nodes: Vec::new(),
             items: Vec::new(),
+            node_capacity,
+            max_depth,
             theta2: theta * theta,
         }
     }
 
     /// Clear all internal data and reconstruct the tree from a sequence of weighted points
-    pub fn build(&mut self, items: Vec<WeightedPoint>, node_capacity: usize) {
+    pub fn build(&mut self, items: Vec<WeightedPoint>) {
         self.nodes.clear();
         self.internal_nodes.clear();
         self.items = items;
@@ -87,11 +96,15 @@ impl BHQuadtree {
         let bound = bound_items(&self.items);
         self.nodes.push(Node::new(bound, 0..self.items.len(), 0));
 
+        let mut node_depths = vec![0];
+
         let mut n = 0;
         while n < self.nodes.len() {
             let range = self.nodes[n].items.clone();
-            if range.len() > node_capacity {
+            let depth = node_depths[n];
+            if range.len() > self.node_capacity && depth < self.max_depth {
                 self.subdivide(n, range);
+                node_depths.extend([depth + 1; 4]);
             } else {
                 for i in range {
                     self.nodes[n].cm.pos += self.items[i].pos * self.items[i].mass;
@@ -207,8 +220,8 @@ mod tests {
             WeightedPoint::new(vec2(0.0, 0.0), 1.0),
             WeightedPoint::new(vec2(1.0, 0.0), 1.0),
         ];
-        let mut qt = BHQuadtree::new(0.0); // theta=0 forces full traversal
-        qt.build(pts.clone(), 2);
+        let mut qt = BHQuadtree::new(2, 8, 0.0); // theta=0 forces full traversal
+        qt.build(pts.clone());
         // one node
         assert_eq!(qt.nodes.len(), 1);
         // cm should be average of positions
@@ -220,8 +233,8 @@ mod tests {
         // since theta=0, it will sum items directly: (0,0)+(1,0)
         assert_eq!(sum, vec2(1.0, 0.0));
         // accumulate with theta large to use cm
-        let mut qt2 = BHQuadtree::new(1000.0);
-        qt2.build(pts.clone(), 2);
+        let mut qt2 = BHQuadtree::new(2, 8, 1000.0);
+        qt2.build(pts.clone());
         let avg: glam::Vec2 = qt2.accumulate(vec2(0.0, 0.0), |wp| wp.pos);
         // should return cm.pos only
         assert_eq!(avg, vec2(0.5, 0.0));
@@ -234,8 +247,8 @@ mod tests {
             WeightedPoint::new(vec2(0.0, 0.0), 1.0),
             WeightedPoint::new(vec2(2.0, 0.0), 1.0),
         ];
-        let mut qt = BHQuadtree::new(0.0);
-        qt.build(pts, 1);
+        let mut qt = BHQuadtree::new(1, 8, 0.0);
+        qt.build(pts);
         // root + 4 children
         assert_eq!(qt.nodes.len(), 1 + 4);
         // internal_nodes contains root index 0
@@ -248,5 +261,17 @@ mod tests {
         // accumulate with theta=0 sums two points
         let sum = qt.accumulate(vec2(1.0, 0.0), |wp| wp.pos);
         assert_eq!(sum, vec2(2.0, 0.0));
+    }
+
+    #[test]
+    fn many_identical_points() {
+        let mut qt = BHQuadtree::new(4, 4, 1.0);
+        let mut pts = vec![
+            WeightedPoint::new(vec2(0.0, 0.0), 1.0),
+            WeightedPoint::new(vec2(2.0, 2.0), 1.0),
+        ];
+        pts.extend([WeightedPoint::new(vec2(0.2, 0.2), 1.0); 10]);
+        // Should not infinite loop
+        qt.build(pts);
     }
 }
