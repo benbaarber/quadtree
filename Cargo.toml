@@ -8,10 +8,14 @@ repository = "https://github.com/benbaarber/quadtree"
 keywords = ["quadtree", "barnes-hut"]
 
 [features]
+default = ["std"]
+
 serde = ["dep:serde", "glam/serde"]
+std = ["glam/std"]
+libm = ["glam/libm"]
 
 [dependencies]
-glam = "0.30.4"
+glam = { version = "0.30.4", default-features = false, features = ["nostd-libm"] }
 serde = { version = "1.0.219", optional = true, features = ["derive"] }
 
 [dev-dependencies]

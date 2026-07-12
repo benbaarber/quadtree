@@ -4,7 +4,10 @@ use crate::{
     util::{Partition, bound_items},
 };
 use glam::Vec2;
-use std::ops::Range;
+
+extern crate alloc;
+use alloc::vec::Vec;
+use core::ops::Range;
 
 /// A point with mass
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

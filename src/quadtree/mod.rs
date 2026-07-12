@@ -1,6 +1,10 @@
 pub mod barnes_hut;
 
 use glam::Vec2;
+
+extern crate alloc;
+use alloc::{boxed::Box, vec, vec::Vec};
+
 #[cfg(feature = "serde")]
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 
@@ -113,6 +117,11 @@ impl<T: Point + Clone> Quadtree<T> {
         let mut results = vec![];
         self.root.query_ref(shape, &filter, &mut results);
         results
+    }
+
+    /// Shrink to fit inserted items
+    pub fn shrink(&mut self) {
+        self.root = self.root.shrink();
     }
 
     /// Delete items that are within a specified shape area
@@ -232,7 +241,7 @@ impl<T: Point + Clone> Node<T> {
                     return true;
                 }
 
-                let mut data = std::mem::take(data);
+                let mut data = core::mem::take(data);
                 data.push(item.clone());
                 let children = self.subdivide();
                 *self = Self::Internal { bound, children };
@@ -493,6 +502,29 @@ impl<T: Point + Clone> Node<T> {
                 false
             }
             Self::Empty { .. } => true,
+        }
+    }
+
+    fn shrink(&mut self) -> Self {
+        let default: Self = Node::Empty {
+            bound: Rect::new(Vec2::default(), Vec2::default()),
+        };
+
+        match self {
+            Self::Empty { .. } => core::mem::replace(self, default),
+            Self::External { .. } => core::mem::replace(self, default),
+            Self::Internal { children, .. } => {
+                let mut nonempty: Vec<&mut Box<Self>> = children
+                    .into_iter()
+                    .filter(|e| !matches!(***e, Node::Empty { .. }))
+                    .collect();
+
+                if nonempty.len() == 1 {
+                    nonempty[0].shrink()
+                } else {
+                    core::mem::replace(self, default)
+                }
+            }
         }
     }
 

@@ -1,5 +1,8 @@
 use glam::vec2;
 
+extern crate alloc;
+use alloc::vec::Vec;
+
 use crate::{
     Point,
     shapes::{Rect, Shape},
@@ -56,7 +59,7 @@ impl<T> Partition<T> for [T] {
 }
 
 pub(crate) fn group_by_quadrant<T: Point>(rect: Rect, items: Vec<T>) -> [Vec<T>; 5] {
-    let mut groups: [Vec<T>; 5] = std::array::from_fn(|_| Vec::with_capacity(items.len()));
+    let mut groups: [Vec<T>; 5] = core::array::from_fn(|_| Vec::with_capacity(items.len()));
     for item in items {
         match rect.quadrant(item.point()) {
             Some(q) => groups[q].push(item),
@@ -68,7 +71,7 @@ pub(crate) fn group_by_quadrant<T: Point>(rect: Rect, items: Vec<T>) -> [Vec<T>;
 
 #[allow(unused)]
 pub(crate) fn group_by_quadrant_slice<'a, T: Point>(rect: Rect, items: &'a [T]) -> [Vec<&'a T>; 5] {
-    let mut groups: [Vec<&T>; 5] = std::array::from_fn(|_| Vec::with_capacity(items.len()));
+    let mut groups: [Vec<&T>; 5] = core::array::from_fn(|_| Vec::with_capacity(items.len()));
     for item in items {
         match rect.quadrant(item.point()) {
             Some(q) => groups[q].push(item),

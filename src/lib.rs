@@ -1,3 +1,5 @@
+#![no_std]
+
 mod quadtree;
 pub mod shapes;
 mod util;
